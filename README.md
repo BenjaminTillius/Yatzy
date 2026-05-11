@@ -1,3 +1,5 @@
+(Läs som "Code")
+
 Innehållsförteckning:
 
 2-yatzy: Innehåller alla filer som beräknar eller simulerar spel av 2-Yatzy, både med pi^Max och pi^Rekord_Beta strategierna
