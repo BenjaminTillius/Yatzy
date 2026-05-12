@@ -1,8 +1,6 @@
-## 📁 Projektstruktur
-> ⚠️ **OBS:** Programmen kräver små ändringar i koden för att uppnå önskat resultat. Med "Input" i beskrivngarna menas
-att t.ex ett tillstånd, en totalpoäng eller Beta måste ändras manuellt i koden, inte att programmet tar någon input.
-> Seeds är satta så att givet att "inputen" är densamma som beskriven i arbetet bör resultatet bli detsamma. 
+> ⚠️ **OBS:** Programmen kräver små ändringar i koden för att uppnå önskat resultat. Med "Input" i beskrivngarna menas att t.ex ett tillstånd, en totalpoäng eller Beta måste ändras manuellt i koden, inte att programmet tar någon input. Seeds är satta så att givet att "inputen" är densamma som beskriven i arbetet bör resultatet bli detsamma. 
 
+## 📁 Projektstruktur
 
 ### `2-yatzy/`
 Innehåller alla filer som beräknar eller simulerar spel av 2-Yatzy, både med π^Max och π^Rekord_Beta strategierna.
