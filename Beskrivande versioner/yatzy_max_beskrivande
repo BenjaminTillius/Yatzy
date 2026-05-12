@@ -1,0 +1,180 @@
+"""
+Beräknar väntevärdet u*(s_1) för skandinaviskt Yatzy med bonus
+med hjälp av bakåtinduktion.
+
+Bonus: +50 poäng om övre sektionen (ettor–sexor) ger minst 63 poäng.
+
+Tillstånd: (kategorimask, gamma, tärningsutfall, omslag)
+  gamma = poäng kvar till bonus (0..63), gamma=0 betyder att bonus är säkrad
+  kategorimask = 15-bitars heltal där bit c = 1 om kategori c är stängd
+
+rundstart[kategorimask, gamma] = förväntad totalpoäng från och med rundestart
+sparas löpande (32768 × 64 värden, ~16 MB).
+"""
+import numpy as np
+from itertools import product as iproduct
+from math import factorial
+
+# ── Spelets grundparametrar ───────────────────────────────────────────────────
+antal_tärningar   = 5   # n i uppsatsen
+antal_sidor       = 6   # k i uppsatsen
+antal_kategorier  = 15  # h i uppsatsen
+bonusgräns        = 63  # gamma_max i uppsatsen: poäng i övre sektionen för bonus
+antal_gammavärden = bonusgräns + 1  # gamma kan vara 0, 1, ..., 63
+bonuspoäng        = 50  # B i uppsatsen
+
+# ── Multinomialkoefficienten ──────────────────────────────────────────────────
+# Beräknar n! / (delta_1! * delta_2! * ... * delta_k!)
+# Anger på hur många sätt man kan ordna n tärningar med delta_i av värde i.
+# Används för att beräkna sannolikheter för tärningsutfall.
+def multinomialkoefficient(tärningar):
+    n = sum(tärningar)
+    resultat = factorial(n)
+    for antal in tärningar:
+        resultat //= factorial(antal)
+    return resultat
+
+# ── Alla möjliga tärningsutfall och keeps ─────────────────────────────────────
+# Ett tärningsutfall representeras som (delta_1,...,delta_6) där delta_i är
+# antalet tärningar med värde i. Summan är alltid exakt antal_tärningar (=5).
+# Ett keep är samma format men summan får vara 0 till 5 — de tärningar man behåller.
+
+alla_utfall  = [u for u in iproduct(range(antal_tärningar+1), repeat=antal_sidor)
+                if sum(u) == antal_tärningar]   # 252 möjliga utfall
+
+alla_keeps   = [k for k in iproduct(range(antal_tärningar+1), repeat=antal_sidor)
+                if sum(k) <= antal_tärningar]   # 462 möjliga keeps
+
+utfall_index = {u:i for i,u in enumerate(alla_utfall)}  # utfall -> index
+
+antal_utfall = len(alla_utfall)  # 252, kallas ND i matriser
+antal_keeps  = len(alla_keeps)   # 462, kallas NK i matriser
+
+utfall_matris = np.array(alla_utfall, dtype=np.int8)  # (252, 6)
+keeps_matris  = np.array(alla_keeps,  dtype=np.int8)  # (462, 6)
+
+# ── Övergångsmatrisen ─────────────────────────────────────────────────────────
+# övergång[ki, di] = sannolikheten att hamna i tärningsutfall di
+#                    om man behåller keep ki och kastar om resten.
+# Beräknas från övergångsfunktionen p_t(j | s_t, a) i uppsatsen.
+övergång = np.zeros((antal_keeps, antal_utfall))
+for ki, keep in enumerate(alla_keeps):
+    antal_omslagda = antal_tärningar - sum(keep)
+    totalt_antal_utfall = antal_sidor ** antal_omslagda
+    for fria in iproduct(range(antal_omslagda+1), repeat=antal_sidor):
+        if sum(fria) != antal_omslagda:
+            continue
+        resultat = tuple(keep[i]+fria[i] for i in range(antal_sidor))
+        if resultat in utfall_index:
+            övergång[ki, utfall_index[resultat]] += multinomialkoefficient(fria) / totalt_antal_utfall
+
+# Sannolikheter för varje utfall vid rundestart (kasta alla 5 tärningar)
+rundstart_sannolikheter = np.array([multinomialkoefficient(u) / antal_sidor**antal_tärningar
+                                    for u in alla_utfall])
+
+# ── Giltiga keeps per tärningsutfall ─────────────────────────────────────────
+# giltiga_keeps[di] = lista med index till keeps som är giltiga för utfall di,
+# dvs. keeps där man inte behåller fler tärningar av ett värde än man slagit.
+giltiga = np.all(keeps_matris[None,:,:] <= utfall_matris[:,None,:], axis=2)  # (252, 462)
+giltiga_keeps = [np.where(giltiga[di])[0] for di in range(antal_utfall)]
+
+# ── Poängfunktionen ───────────────────────────────────────────────────────────
+# Beräknar poängen för ett tärningsutfall i en given kategori.
+# Kategori 0-5: ettor–sexor (övre sektionen)
+# Kategori 6-14: ett par, två par, tre lika, fyra lika,
+#                liten stege, stor stege, kåk, chans, Yatzy
+def poäng(tärningsutfall, kategori):
+    c = list(tärningsutfall)
+    if kategori <= 5:
+        return c[kategori] * (kategori + 1)
+    if kategori == 6:   # ett par: högsta paret
+        for v in range(5,-1,-1):
+            if c[v] >= 2: return 2*(v+1)
+        return 0
+    if kategori == 7:   # två par: de två högsta paren
+        par = [v+1 for v in range(6) if c[v] >= 2]
+        return 2*sum(sorted(par)[-2:]) if len(par) >= 2 else 0
+    if kategori == 8:   # tre lika: högsta tretal
+        for v in range(5,-1,-1):
+            if c[v] >= 3: return 3*(v+1)
+        return 0
+    if kategori == 9:   # fyra lika: högsta fyrtal
+        for v in range(5,-1,-1):
+            if c[v] >= 4: return 4*(v+1)
+        return 0
+    if kategori == 10:  # liten stege: 1-2-3-4-5
+        return 15 if all(c[v] >= 1 for v in range(5)) else 0
+    if kategori == 11:  # stor stege: 2-3-4-5-6
+        return 20 if all(c[v] >= 1 for v in range(1,6)) else 0
+    if kategori == 12:  # kåk: tre lika + par av olika värden
+        tretal = next((v+1 for v in range(5,-1,-1) if c[v] >= 3), None)
+        par    = next((v+1 for v in range(5,-1,-1) if c[v] >= 2 and (v+1) != tretal), None)
+        return 3*tretal + 2*par if tretal and par else 0
+    if kategori == 13:  # chans: summan av alla tärningar
+        return sum((v+1)*c[v] for v in range(6))
+    if kategori == 14:  # Yatzy: fem lika
+        return 50 if any(x == 5 for x in c) else 0
+    return 0
+
+# Förberäknad poängtabell: poäng_tabell[di, kat] = poäng för utfall di i kategori kat
+poäng_tabell = np.array([[poäng(u, kat) for kat in range(antal_kategorier)]
+                          for u in alla_utfall], dtype=np.float64)  # (252, 15)
+
+# ── Nytt gamma efter kategorival ─────────────────────────────────────────────
+# nytt_gamma[kat][gamma, di] = max(0, gamma - poäng[di, kat])
+# Beräknas bara för övre kategorier (0-5) som påverkar gamma.
+gamma_vektor = np.arange(antal_gammavärden)[:, None]  # (64, 1)
+nytt_gamma = {kat: np.maximum(0, gamma_vektor - poäng_tabell[:,kat][None,:]).astype(np.int32)
+              for kat in range(6)}  # (64, 252) per kategori
+
+# ── Bästa omslagsval ─────────────────────────────────────────────────────────
+# Tar in V (förväntad framtida belöning per gamma och utfall) och returnerar
+# det bästa möjliga värdet efter ett omslag, för varje (gamma, utfall).
+def bästa_omslag(V):
+    """V: (64, 252) → V_nästa: (64, 252)"""
+    förväntat_värde = övergång @ V.T          # (462, 64): EV per keep och gamma
+    V_nästa = np.empty((antal_gammavärden, antal_utfall))
+    for di in range(antal_utfall):
+        V_nästa[:, di] = förväntat_värde[giltiga_keeps[di], :].max(axis=0)
+    return V_nästa
+
+# ── Rundstart-tabellen ────────────────────────────────────────────────────────
+# rundstart[kategorimask, gamma] = förväntad totalpoäng från och med rundestart
+# givet att kategorimask kategorier är stängda och gamma poäng saknas till bonus.
+antal_maskar  = 1 << antal_kategorier   # 2^15 = 32768
+full_mask     = antal_maskar - 1        # alla kategorier stängda
+
+rundstart = np.zeros((antal_maskar, antal_gammavärden))
+rundstart[full_mask, 0] = bonuspoäng   # terminalbelöning: bonus om gamma=0
+
+# ── Bakåtinduktion ────────────────────────────────────────────────────────────
+# Itererar bakåt från nästan-terminal mot starttillståndet.
+# För varje kategorimask beräknas det förväntade värdet vid rundestart.
+for kategorimask in range(full_mask - 1, -1, -1):
+    öppna_kategorier = [k for k in range(antal_kategorier)
+                        if not (kategorimask >> k & 1)]
+    if not öppna_kategorier:
+        continue
+
+    # Kategorival: V0[gamma, di] = max över öppna kategorier av
+    # { poäng[di, kat] + rundstart[ny_mask, nytt_gamma] }
+    V0 = np.full((antal_gammavärden, antal_utfall), -1e18)
+    for kat in öppna_kategorier:
+        ny_mask = kategorimask | (1 << kat)
+        r = poäng_tabell[:, kat]                        # (252,)
+        if kat < 6:
+            rs = rundstart[ny_mask, nytt_gamma[kat]]    # (64, 252)
+        else:
+            rs = rundstart[ny_mask, :][:, None]         # (64, 1) → broadcast
+        np.maximum(V0, r[None,:] + rs, out=V0)
+
+    # Omslagsval: två omslag per runda
+    V1 = bästa_omslag(V0)   # efter 1 omslag
+    V2 = bästa_omslag(V1)   # efter 2 omslag
+
+    # Spara förväntad totalpoäng vid rundestart för denna mask
+    rundstart[kategorimask, :] = rundstart_sannolikheter @ V2.T
+
+# ── Resultat ──────────────────────────────────────────────────────────────────
+# Starttillståndet: inga kategorier stängda (mask=0), gamma=63 (ingen bonus ännu)
+print(f"u*(s_1) = {rundstart[0, bonusgräns]:.4f}")
